@@ -3,3 +3,5 @@ requests
 playwright
 patchright
 colorama
+python-telegram-bot
+pymongo
