@@ -9,25 +9,31 @@ import colorama
 from colorama import Fore
 from pymongo import MongoClient
 import uuid
-import asyncio
-from telegram.error import Conflict
-from telegram.ext import Application, CommandHandler, MessageHandler, filters
-import sys
+from fastapi import FastAPI, Request, HTTPException
+from starlette.responses import Response
+import uvicorn
+
 colorama.init()
 
+# Logging configuration
 logging.basicConfig(
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
     level=logging.INFO
 )
 logger = logging.getLogger(__name__)
 
-TOKEN = "8082492937:AAHBh3y4ZAYFf6KP9RJbyDxTEx20fyHp4lM"
+# Environment variables
+TOKEN = os.getenv("TELEGRAM_TOKEN", "8082492937:AAHBh3y4ZAYFf6KP9RJbyDxTEx20fyHp4lM")
+WEBHOOK_PATH = "/webhook"
+WEBHOOK_URL = os.getenv("WEBHOOK_URL", "https://tst-1-lz3n.onrender.com")  # Set in Render, e.g., https://your-app.onrender.com
+PORT = int(os.getenv("PORT", 8443))  # Render assigns PORT dynamically, default to 8443 for local
 
 MONGO_CONFIG = {
-    "mongodb_connection": "mongodb+srv://awsam:xP2qBSWmI2ivXWDC@llama.ytfhmce.mongodb.net/?retryWrites=true&w=majority&appName=LLAMA",
+    "mongodb_connection": os.getenv("MONGODB_CONNECTION", "mongodb+srv://awsam:xP2qBSWmI2ivXWDC@llama.ytfhmce.mongodb.net/?retryWrites=true&w=majority&appName=LLAMA"),
     "database_name": "peter"
 }
 
+# MongoDB setup
 client = MongoClient(MONGO_CONFIG["mongodb_connection"])
 db = client[MONGO_CONFIG["database_name"]]
 keys_collection = db["keys"]
@@ -35,9 +41,9 @@ keys_collection = db["keys"]
 ADMIN_USER_ID = 7770834964
 
 user_sessions = {}
-
 GLOBAL_SEMAPHORE = asyncio.Semaphore(5)
 
+# UserSession and Key classes (unchanged)
 class UserSession:
     def __init__(self, user_id):
         self.user_id = user_id
@@ -62,6 +68,7 @@ class Key:
         self.created_at = created_at or datetime.utcnow()
         self.active = True
 
+# Authorization and session functions (unchanged)
 def is_admin(user_id: int) -> bool:
     return user_id == ADMIN_USER_ID
 
@@ -86,6 +93,7 @@ def get_user_session(user_id: int) -> UserSession:
         user_sessions[user_id] = UserSession(user_id)
     return user_sessions[user_id]
 
+# Command handlers (unchanged)
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     user_id = update.effective_user.id
     await update.message.reply_text(
@@ -317,7 +325,7 @@ async def process_single_account(email, password, session, context):
             async with session.lock:
                 session.checked_accounts += 1
                 if result == "valid":
-                    session.valid_accounts += 1
+                    session.valid_workers += 1
                     balance = "0.00€"
                     results_dir = os.path.join(SCRIPT_DIR, 'results')
                     if os.path.exists(results_dir):
@@ -441,9 +449,44 @@ async def monitor_and_process_accounts(session, context):
             task.cancel()
         session.current_tasks.clear()
 
+# FastAPI app for webhook
+app = FastAPI()
+application = None  # Global application instance
 
-def main() -> None:
+@app.post(WEBHOOK_PATH)
+async def webhook(request: Request):
+    """Handle incoming Telegram updates via webhook."""
+    try:
+        update = Update.de_json(await request.json(), application.bot)
+        await application.process_update(update)
+        return Response(status_code=200)
+    except Exception as e:
+        logger.error(f"Webhook error: {str(e)}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/")
+async def root():
+    """Health check endpoint."""
+    return {"status": "ok"}
+
+async def set_webhook():
+    """Set the Telegram webhook."""
+    if not WEBHOOK_URL:
+        raise ValueError("WEBHOOK_URL environment variable is not set")
+    webhook_url = f"{WEBHOOK_URL}{WEBHOOK_PATH}"
+    try:
+        await application.bot.set_webhook(url=webhook_url)
+        logger.info(f"Webhook set to {webhook_url}")
+    except Exception as e:
+        logger.error(f"Failed to set webhook: {str(e)}")
+        raise
+
+async def main():
+    global application
+    # Build the Telegram application
     application = Application.builder().token(TOKEN).build()
+
+    # Add handlers (unchanged)
     application.add_handler(CommandHandler("start", start))
     application.add_handler(CommandHandler("redeem", activate_key))
     application.add_handler(CommandHandler("check", check_accounts))
@@ -455,36 +498,16 @@ def main() -> None:
     application.add_handler(CommandHandler("delete_key", delete_key))
     application.add_handler(MessageHandler(filters.Document.TEXT, check_accounts))
 
-    async def run_polling_with_delay():
-        polling_delay = 1.0  # Delay in seconds between polling attempts
-        max_retries = 5  # Max retries for conflict errors
-        retry_count = 0
+    # Initialize the application
+    await application.initialize()
 
-        while True:
-            try:
-                logger.info("Starting polling cycle...")
-                await application.run_polling(
-                    timeout=10,  # Time to wait for updates in each getUpdates call
-                    drop_pending_updates=True,  # Drop any pending updates to avoid conflicts
-                    allowed_updates=["message", "callback_query"]  # Limit update types
-                )
-                break  # Exit loop if polling succeeds
-            except Conflict as e:
-                retry_count += 1
-                logger.error(f"Conflict error (attempt {retry_count}/{max_retries}): {str(e)}")
-                if retry_count >= max_retries:
-                    logger.error("Max retries reached. Exiting.")
-                    sys.exit(1)
-                logger.info(f"Waiting {polling_delay} seconds before retrying...")
-                await asyncio.sleep(polling_delay)
-                polling_delay *= 2  # Exponential backoff
-            except Exception as e:
-                logger.error(f"Unexpected error: {str(e)}")
-                sys.exit(1)
+    # Set webhook
+    await set_webhook()
 
-    # Run the polling with delay in an asyncio event loop
-    asyncio.run(run_polling_with_delay())
-
+    # Start FastAPI server
+    config = uvicorn.Config(app=app, host="0.0.0.0", port=PORT, log_level="info")
+    server = uvicorn.Server(config)
+    await server.serve()
 
 if __name__ == '__main__':
-    main()
+    asyncio.run(main())
