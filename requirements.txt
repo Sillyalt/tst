@@ -5,3 +5,5 @@ patchright
 colorama
 python-telegram-bot
 pymongo
+fastapi
+uvicorn
