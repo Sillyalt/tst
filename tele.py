@@ -9,6 +9,10 @@ import colorama
 from colorama import Fore
 from pymongo import MongoClient
 import uuid
+import asyncio
+from telegram.error import Conflict
+from telegram.ext import Application, CommandHandler, MessageHandler, filters
+import sys
 colorama.init()
 
 logging.basicConfig(
@@ -437,6 +441,7 @@ async def monitor_and_process_accounts(session, context):
             task.cancel()
         session.current_tasks.clear()
 
+
 def main() -> None:
     application = Application.builder().token(TOKEN).build()
     application.add_handler(CommandHandler("start", start))
@@ -449,7 +454,37 @@ def main() -> None:
     application.add_handler(CommandHandler("list_keys", list_keys))
     application.add_handler(CommandHandler("delete_key", delete_key))
     application.add_handler(MessageHandler(filters.Document.TEXT, check_accounts))
-    application.run_polling()
+
+    async def run_polling_with_delay():
+        polling_delay = 1.0  # Delay in seconds between polling attempts
+        max_retries = 5  # Max retries for conflict errors
+        retry_count = 0
+
+        while True:
+            try:
+                logger.info("Starting polling cycle...")
+                await application.run_polling(
+                    timeout=10,  # Time to wait for updates in each getUpdates call
+                    drop_pending_updates=True,  # Drop any pending updates to avoid conflicts
+                    allowed_updates=["message", "callback_query"]  # Limit update types
+                )
+                break  # Exit loop if polling succeeds
+            except Conflict as e:
+                retry_count += 1
+                logger.error(f"Conflict error (attempt {retry_count}/{max_retries}): {str(e)}")
+                if retry_count >= max_retries:
+                    logger.error("Max retries reached. Exiting.")
+                    sys.exit(1)
+                logger.info(f"Waiting {polling_delay} seconds before retrying...")
+                await asyncio.sleep(polling_delay)
+                polling_delay *= 2  # Exponential backoff
+            except Exception as e:
+                logger.error(f"Unexpected error: {str(e)}")
+                sys.exit(1)
+
+    # Run the polling with delay in an asyncio event loop
+    asyncio.run(run_polling_with_delay())
+
 
 if __name__ == '__main__':
     main()
