@@ -25,8 +25,8 @@ logger = logging.getLogger(__name__)
 # Environment variables
 TOKEN = os.getenv("TELEGRAM_TOKEN", "8082492937:AAHBh3y4ZAYFf6KP9RJbyDxTEx20fyHp4lM")
 WEBHOOK_PATH = "/webhook"
-WEBHOOK_URL = os.getenv("WEBHOOK_URL", "https://tst-1-lz3n.onrender.com")  # Set in Render, e.g., https://your-app.onrender.com
-PORT = int(os.getenv("PORT", 8443))  # Render assigns PORT dynamically, default to 8443 for local
+WEBHOOK_URL = os.getenv("WEBHOOK_URL", "https://tst-1-lz3n.onrender.com")  # Set in Render
+PORT = int(os.getenv("PORT", 8443))  # Render assigns PORT dynamically
 
 MONGO_CONFIG = {
     "mongodb_connection": os.getenv("MONGODB_CONNECTION", "mongodb+srv://awsam:xP2qBSWmI2ivXWDC@llama.ytfhmce.mongodb.net/?retryWrites=true&w=majority&appName=LLAMA"),
@@ -181,7 +181,7 @@ async def list_keys(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     for key in keys_list:
         response += (f"Key: `{key['key']}`\n"
                      f"Max Uses: {key['max_uses']}\n"
-                     f"Used: {key['used_uses']}\n"
+                     f"Used hampered: {key['used_uses']}\n"
                      f"Created: {key['created_at']}\n"
                      f"Assigned User: {key.get('user_id', 'None')}\n\n")
     await update.message.reply_text(response)
@@ -325,7 +325,7 @@ async def process_single_account(email, password, session, context):
             async with session.lock:
                 session.checked_accounts += 1
                 if result == "valid":
-                    session.valid_workers += 1
+                    session.valid_accounts += 1  # Fixed typo: valid_workers -> valid_accounts
                     balance = "0.00€"
                     results_dir = os.path.join(SCRIPT_DIR, 'results')
                     if os.path.exists(results_dir):
@@ -475,7 +475,7 @@ async def set_webhook():
         raise ValueError("WEBHOOK_URL environment variable is not set")
     webhook_url = f"{WEBHOOK_URL}{WEBHOOK_PATH}"
     try:
-        await application.bot.set_webhook(url=webhook_url)
+        await application.bot.setWebhook(url=webhook_url)  # Use setWebhook (capital 'W')
         logger.info(f"Webhook set to {webhook_url}")
     except Exception as e:
         logger.error(f"Failed to set webhook: {str(e)}")
